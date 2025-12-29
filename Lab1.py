@@ -17,6 +17,7 @@ def DDA(x1,y1,x2,y2):
         pygame.draw.circle(screen,WHITE,(round(x),round(y)),1)
         x+=x_inc
         y+=y_inc
+    print("ednj")    
 def main():
     screen.fill(BLACK)
     x1,y1=100,100
