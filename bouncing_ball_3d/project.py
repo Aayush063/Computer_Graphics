@@ -1,237 +1,211 @@
-import pygame
-import random
-import math
-import sys
+import pygame, math, sys, random, os
 
 pygame.init()
-
-
-# WINDOW SETUP
-
-WIDTH, HEIGHT = 600, 800
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Color Shift Survival - Final Version")
+WIDTH, HEIGHT = 800, 600
+window = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Haunted House Stickman Edition")
 clock = pygame.time.Clock()
-font = pygame.font.SysFont("arial", 28)
-big_font = pygame.font.SysFont("arial", 60)
 
+# --- Sounds ---
+pygame.mixer.init()
+ghost_sound = None
+jump_scare_sound = None
 
-# HIGH SCORE SYSTEM
+if os.path.exists("ghost.mp3"):
+    ghost_sound = pygame.mixer.Sound("ghost.mp3")
+    ghost_sound.set_volume(100)
 
-def load_high_score():
-    try:
-        with open("highscore.txt", "r") as file:
-            return int(file.read())
-    except:
-        return 0
+if os.path.exists("jumpscare.mp3"):
+    jump_scare_sound = pygame.mixer.Sound("jumpscare.mp3")
+    jump_scare_sound.set_volume(100)
 
-def save_high_score(score):
-    with open("highscore.txt", "w") as file:
-        file.write(str(score))
-
-high_score = load_high_score()
-new_high = False
-
-# -----------------------
-# COLORS
-# -----------------------
-COLORS = [
-    (255, 80, 80),
-    (80, 255, 120),
-    (80, 150, 255),
-    (255, 220, 70)
+# --- Map ---
+FLOOR = [
+    [1,1,1,1,1,1,1,1,1],
+    [1,0,0,0,0,0,0,0,1],
+    [1,0,1,0,1,0,1,0,1],
+    [1,0,1,0,1,0,1,0,1],
+    [1,0,0,0,0,0,0,0,1],
+    [1,1,1,1,1,1,1,1,1]
 ]
 
-# -----------------------
-# PLAYER CLASS
-# -----------------------
-class Player:
-    def __init__(self):
-        self.radius = 20
-        self.x = WIDTH // 2
-        self.y = HEIGHT - 120
-        self.color_index = 0
-        self.lives = 3
-        self.speed = 6
+MAP_WIDTH = len(FLOOR[0])
+MAP_HEIGHT = len(FLOOR)
+TILE = 64
 
-    def move(self, keys):
-        if keys[pygame.K_LEFT] and self.x - self.radius > 0:
-            self.x -= self.speed
-        if keys[pygame.K_RIGHT] and self.x + self.radius < WIDTH:
-            self.x += self.speed
+# Player
+player_x = TILE*1.5
+player_y = TILE*1.5
+player_angle = 0
+player_speed = 2
 
-    def switch_color(self):
-        self.color_index = (self.color_index + 1) % len(COLORS)
+# Colors
+WHITE = (255,255,255)
+WALL_COLOR = (40,40,40)
+CEILING_COLOR = (20,20,20)
+FLOOR_COLOR = (40,40,40)
+RED = (255,0,0)
+GREEN = (0,255,0)
 
-    def draw(self):
-        color = COLORS[self.color_index]
-        pygame.draw.circle(screen, color, (int(self.x), self.y), self.radius)
-        pygame.draw.circle(screen, (255, 255, 255), (int(self.x), self.y), self.radius, 2)
+FOV = math.pi/3
+NUM_RAYS = 120
+MAX_DEPTH = 800
+DELTA_ANGLE = FOV / NUM_RAYS
+DIST_PROJ_PLANE = (WIDTH/2)/math.tan(FOV/2)
+SCALE = WIDTH // NUM_RAYS
 
-# -----------------------
-# OBSTACLE CLASS
-# -----------------------
-class Obstacle:
-    def __init__(self, difficulty):
-        self.radius = random.randint(70, 100)
-        self.x = random.randint(150, WIDTH - 150)
-        self.y = -100
-        self.speed = 4 + difficulty
-        self.rotation = 0
-        self.rotation_speed = random.uniform(0.01, 0.03)
-        self.colors = random.sample(COLORS, 4)
-        self.checked = False
+# ----- Stickman drawing -----
+def make_stickman(size):
+    surf = pygame.Surface((size, size), pygame.SRCALPHA)
+    cx, cy = size//2, size//2
+
+    pygame.draw.circle(surf, WHITE, (cx, cy-size//4), size//8, 3)
+    pygame.draw.line(surf, WHITE, (cx, cy-size//8), (cx, cy+size//6), 3)
+    pygame.draw.line(surf, WHITE, (cx, cy), (cx-size//6, cy-size//10), 3)
+    pygame.draw.line(surf, WHITE, (cx, cy), (cx+size//6, cy-size//10), 3)
+    pygame.draw.line(surf, WHITE, (cx, cy+size//6), (cx-size//8, cy+size//3), 3)
+    pygame.draw.line(surf, WHITE, (cx, cy+size//6), (cx+size//8, cy+size//3), 3)
+    return surf
+
+STICKMAN = make_stickman(int(TILE//1.5 * 0.75))
+
+class StickmanMove:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.sprite = STICKMAN
+        self.dx = random.choice([-1,1])
+        self.dy = random.choice([-1,1])
+        self.jump_triggered = False
 
     def move(self):
-        self.y += self.speed
-        self.rotation += self.rotation_speed
+        nx = self.x + self.dx*0.4
+        ny = self.y + self.dy*0.4
+        if FLOOR[int(ny//TILE)][int(nx//TILE)] == 0:
+            self.x, self.y = nx, ny
+        else:
+            self.dx *= -1
+            self.dy *= -1
 
-    def draw(self):
-        for i in range(4):
-            start_angle = self.rotation + i * math.pi/2
-            end_angle = start_angle + math.pi/2
-            pygame.draw.arc(
-                screen,
-                self.colors[i],
-                (self.x - self.radius, self.y - self.radius,
-                 self.radius * 2, self.radius * 2),
-                start_angle,
-                end_angle,
-                18
-            )
+stickmen = [
+    StickmanMove(TILE*3.5, TILE*2.5),
+    StickmanMove(TILE*5.5, TILE*1.5),
+    StickmanMove(TILE*2.5, TILE*3.5),
+    StickmanMove(TILE*4.5, TILE*4.0)
+]
 
-    def check_collision(self, player):
-        distance = math.hypot(player.x - self.x, player.y - self.y)
+# ----- RAYCAST -----
+def raycast():
+    start_angle = player_angle - FOV/2
+    for ray in range(NUM_RAYS):
+        angle = start_angle + ray*DELTA_ANGLE
+        sin_a = math.sin(angle)
+        cos_a = math.cos(angle)
 
-        if not self.checked and distance <= self.radius:
-            self.checked = True
+        for depth in range(MAX_DEPTH):
+            x = player_x + cos_a * depth
+            y = player_y + sin_a * depth
 
-            angle = math.atan2(player.y - self.y, player.x - self.x)
-            if angle < 0:
-                angle += 2 * math.pi
+            i = int(x//TILE)
+            j = int(y//TILE)
 
-            angle -= self.rotation
-            if angle < 0:
-                angle += 2 * math.pi
+            if FLOOR[j][i] == 1:
+                h = min(int(DIST_PROJ_PLANE*TILE/(depth+0.01)), HEIGHT)
+                pygame.draw.rect(window, (80,80,80), (ray*SCALE, HEIGHT/2 - h/2, SCALE, h))
+                break
 
-            segment = int(angle // (math.pi/2))
+# ----- SPRITE PROJECTION -----
+def draw_sprite(x, y, sprite):
+    dx, dy = x - player_x, y - player_y
+    dist = math.hypot(dx, dy)
+    ang = math.atan2(dy, dx)
+    gamma = ang - player_angle
 
-            if self.colors[segment] == COLORS[player.color_index]:
-                return "score"
-            else:
-                return "hit"
+    if -FOV/2 < gamma < FOV/2:
+        h = min(int(DIST_PROJ_PLANE*TILE/(dist+0.01)), HEIGHT)
+        screen_x = int((WIDTH/2)*(1 + math.tan(gamma)/math.tan(FOV/2))) - h//2
+        sp = pygame.transform.scale(sprite, (h, h))
+        window.blit(sp, (screen_x, HEIGHT//2 - h//2))
+        return dist
+    return None
 
-        return None
+# ----- MINIMAP -----
+def draw_minimap():
+    MINI_TILE = 12
+    mm_x = 10
+    mm_y = 10
 
-# -----------------------
-# BACKGROUND ANIMATION
-# -----------------------
-def draw_background(tick):
-    for y in range(HEIGHT):
-        r = int(40 + 40 * math.sin(tick * 0.02 + y * 0.01))
-        g = int(40 + 40 * math.sin(tick * 0.02 + y * 0.015))
-        b = int(80 + 40 * math.sin(tick * 0.02))
-        pygame.draw.line(screen, (r, g, b), (0, y), (WIDTH, y))
+    # map border
+    pygame.draw.rect(window, (0,0,0), (mm_x-2, mm_y-2, MAP_WIDTH*MINI_TILE+4, MAP_HEIGHT*MINI_TILE+4))
 
-# -----------------------
-# GAME VARIABLES
-# -----------------------
-player = Player()
-obstacles = []
-score = 0
-difficulty = 0
-spawn_timer = 0
-tick = 0
-game_over = False
+    # draw walls
+    for j in range(MAP_HEIGHT):
+        for i in range(MAP_WIDTH):
+            if FLOOR[j][i] == 1:
+                pygame.draw.rect(window, WALL_COLOR,
+                    (mm_x + i*MINI_TILE, mm_y + j*MINI_TILE, MINI_TILE, MINI_TILE))
 
-# -----------------------
-# MAIN GAME LOOP
-# -----------------------
-while True:
-    clock.tick(60)
-    tick += 1
-    keys = pygame.key.get_pressed()
+    # stickmen
+    for s in stickmen:
+        sx = mm_x + (s.x/TILE)*MINI_TILE
+        sy = mm_y + (s.y/TILE)*MINI_TILE
+        pygame.draw.circle(window, GREEN, (int(sx), int(sy)), 3)
+
+    # player
+    px = mm_x + (player_x/TILE)*MINI_TILE
+    py = mm_y + (player_y/TILE)*MINI_TILE
+    pygame.draw.circle(window, RED, (int(px), int(py)), 4)
+
+# ----- MAIN LOOP -----
+running = True
+while running:
+    window.fill(FLOOR_COLOR)
+    pygame.draw.rect(window, CEILING_COLOR, (0,0,WIDTH,HEIGHT//2))
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
-            pygame.quit()
-            sys.exit()
+            running = False
 
-        if event.type == pygame.KEYDOWN:
-            if not game_over:
-                if event.key == pygame.K_SPACE:
-                    player.switch_color()
-            else:
-                if event.key == pygame.K_r:
-                    player = Player()
-                    obstacles.clear()
-                    score = 0
-                    difficulty = 0
-                    game_over = False
-                    new_high = False
+    keys = pygame.key.get_pressed()
+    if keys[pygame.K_LEFT]: player_angle -= 0.03
+    if keys[pygame.K_RIGHT]: player_angle += 0.03
 
-    draw_background(tick)
+    if keys[pygame.K_UP]:
+        nx = player_x + player_speed*math.cos(player_angle)
+        ny = player_y + player_speed*math.sin(player_angle)
+        if FLOOR[int(ny//TILE)][int(nx//TILE)] == 0:
+            player_x, player_y = nx, ny
 
-    if not game_over:
+    if keys[pygame.K_DOWN]:
+        nx = player_x - player_speed*math.cos(player_angle)
+        ny = player_y - player_speed*math.sin(player_angle)
+        if FLOOR[int(ny//TILE)][int(nx//TILE)] == 0:
+            player_x, player_y = nx, ny
 
-        player.move(keys)
+    raycast()
 
-        spawn_timer += 1
-        if spawn_timer > 80:
-            obstacles.append(Obstacle(difficulty))
-            spawn_timer = 0
+    # Stickmen
+    for s in stickmen:
+        s.move()
+        dist = draw_sprite(s.x, s.y, s.sprite)
 
-        for obstacle in obstacles[:]:
-            obstacle.move()
-            obstacle.draw()
+        if dist and ghost_sound and dist < 120:
+            ghost_sound.play()
 
-            result = obstacle.check_collision(player)
+        if dist and jump_scare_sound and dist < 50 and not s.jump_triggered:
+            jump_scare_sound.play()
+            s.jump_triggered = True
+        else:
+            s.jump_triggered = False
 
-            if result == "hit":
-                player.lives -= 1
-                obstacles.remove(obstacle)
-
-            elif result == "score":
-                score += 10
-                difficulty += 0.2
-
-            if obstacle.y > HEIGHT + 100:
-                obstacles.remove(obstacle)
-
-        player.draw()
-
-        # UI
-        score_text = font.render(f"Score: {score}", True, (255, 255, 255))
-        lives_text = font.render(f"Lives: {player.lives}", True, (255, 255, 255))
-        high_text = font.render(f"High Score: {high_score}", True, (255, 255, 255))
-
-        screen.blit(score_text, (20, 20))
-        screen.blit(lives_text, (20, 60))
-        screen.blit(high_text, (20, 100))
-
-        if player.lives <= 0:
-            game_over = True
-
-            if score > high_score:
-                high_score = score
-                save_high_score(high_score)
-                new_high = True
-            else:
-                new_high = False
-
-    else:
-        over_text = big_font.render("GAME OVER", True, (255, 80, 80))
-        final_score = font.render(f"Final Score: {score}", True, (255, 255, 255))
-        high_display = font.render(f"High Score: {high_score}", True, (255, 255, 255))
-        restart_text = font.render("Press R to Restart", True, (255, 255, 255))
-
-        screen.blit(over_text, (WIDTH//2 - over_text.get_width()//2, HEIGHT//2 - 120))
-        screen.blit(final_score, (WIDTH//2 - final_score.get_width()//2, HEIGHT//2 - 40))
-        screen.blit(high_display, (WIDTH//2 - high_display.get_width()//2, HEIGHT//2))
-        screen.blit(restart_text, (WIDTH//2 - restart_text.get_width()//2, HEIGHT//2 + 60))
-
-        if new_high:
-            new_text = font.render("NEW HIGH SCORE!", True, (255, 215, 0))
-            screen.blit(new_text, (WIDTH//2 - new_text.get_width()//2, HEIGHT//2 + 100))
+    # draw minimap
+    draw_minimap()
 
     pygame.display.flip()
+    clock.tick(60)
+
+pygame.quit()
+sys.exit()
+
+
+
